@@ -1,4 +1,6 @@
 import { LightningElement, api, track } from 'lwc';
+import { NullValueError, ExpressionEvaluationError } from './xParseErrors';
+import { swapPeriodsAndCommas } from './utils';
 export default class XParser extends LightningElement {
     
     tree;
@@ -6,16 +8,71 @@ export default class XParser extends LightningElement {
     variableMap;
     callback;
     operations;
-
+    tokens;
+    _internationalFormat;
     /**
      * Current Limitations:
      * 1. Expressions must contain unformatted numbers (no $, or commas)
      * 2. Only Functions, Single-Character Operations, Variables, and  may be used.
-     */
-
-
+    */
     connectedCallback(){
         this._initializeOperations();
+    }
+    
+    tokenizeExpression(expression) {
+        let tokens = [];
+        let currentToken = '';
+        let previousChar = '';
+        for (let char of expression) {
+            // Note: never push previousChar onto the tokens stack, as its more to be used to delinate different tokens
+            // Written for readability (sorta)
+            if (this._isNumber(char)) {
+                if (!this._isNumber(previousChar) && !this._isDecimalPoint(previousChar) && currentToken !== '') { // If this is the start of a number, push current token on stack
+                    tokens.push(currentToken);
+                    currentToken = '';  // Reset token
+                }
+                currentToken += char;
+            } else if (this._isLetter(char)) {
+                if (!this._isLetter(previousChar) && currentToken !== '') {
+                    tokens.push(currentToken);
+                    currentToken = '';
+                }
+                currentToken += char;
+            } else if (this._isComma(char)) {
+                continue;   // Drop commas
+            } else if (this._isDecimalPoint(char)) {
+                currentToken += char;
+            } else if (this._isOperation(char)) {
+                if (currentToken !== '') {
+                    tokens.push(currentToken);
+                    currentToken = '';
+                }
+                tokens.push(char);
+            } else if (this._isLeftParen(char)) {
+                if (currentToken !== '') {
+                    tokens.push(currentToken)
+                    currentToken = '';
+                }
+                tokens.push(char);
+            } else {
+                console.log('Unexpected character in expression: ' + char);
+            }
+
+            previousChar = char;
+        }
+
+        return tokens;
+    }
+    
+    _preprocessExpression(expression) {
+        if (!expression instanceof String) { throw new ExpressionEvaluationError('Expression not instance of String.'); }
+        if (this._internationalFormat) {
+            expression = swapPeriodsAndCommas(expression);
+        }
+        expression = expression.replaceAll(' ', '').replaceAll('\t','').replaceAll('\n',);
+        
+
+        return expression;
     }
 
 
@@ -32,11 +89,15 @@ export default class XParser extends LightningElement {
      * @param {String} expression 
      * @param {object} variableMap 
      * @param {CallableFunction} callback 
+     * @param {boolean} internationalFormat - Are commas and decimal points swapped? E.g. 1,000,000.00 (non-international) versus 1.000.000,00 (international). Sorry I'm from the USA lol
      */
-    calculate(expression, variableMap=None, callback) {
+    calculate(expression, variableMap=None, callback, internationalFormat=false) {
+        this._internationalFormat = internationalFormat;
+        expression = this._preprocessExpression(expression);
         this.expression = expression;
         this.variableMap = variableMap;
         this.callback = callback;
+        this.tokens = this._tokenizeExpression(this.expression);
     }
 
 
@@ -94,7 +155,43 @@ export default class XParser extends LightningElement {
             });
     }
 
+
+    _isNumber(str) {
+        return /\d/.test(str);
+    }
+
+    _isLetter(str) {
+        return /[a-zA-z]/.test(str);
+    }
+
+    _isDecimalPoint(str) {
+        return str === '.';
+    }
+
+    _isComma(str) {
+        return str === ',';
+    }
+
+    _isOperation(str) {
+        for (let operation of this.operations) {
+            if (str === operation.name && operation.isFunction) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _isLeftParen(str) {
+        return str === '(';
+    }
+
+    _isRightParen(str) {
+        return str === ')';
+    }
+
 }
+
+
 
 class Value {
     isVariable;
@@ -253,5 +350,5 @@ class Node {
     }
 }
 
-class NullValueError extends Error { }
+
 
